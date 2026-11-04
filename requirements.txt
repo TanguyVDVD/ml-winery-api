@@ -1,0 +1,7 @@
+fastapi
+uvicorn[standard]
+pandas
+joblib
+# Same exact version where the model is trained and where it is loaded:
+# a .joblib file made with another version may not load, or give wrong results.
+scikit-learn==1.9.1

@@ -1,0 +1,10 @@
+# Secrets, data and model come from .env and volumes, never baked into the image
+.env
+data/
+models/
+tests/
+__pycache__/
+*.pyc
+Dockerfile
+docker-compose.yaml
+Caddyfile
