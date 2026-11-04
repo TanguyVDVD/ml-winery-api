@@ -1,0 +1,9 @@
+# Secrets
+.env
+# Home measures and the model trained on them
+data/
+models/
+# Python
+__pycache__/
+*.pyc
+.venv/

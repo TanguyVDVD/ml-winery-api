@@ -3,7 +3,7 @@
 Petit serveur qui dit si une mesure d'un Peltier est **inhabituelle**. Le Pi l'appelle une fois par minute ; le modèle donne un avis, écrit dans les logs du Pi. **Il ne commande jamais les relais** : la sécurité reste assurée par les règles de `api/peltier/cellar.py`.
 
 ```text
-Pi : mqtt-consumer ──HTTPS + jeton──> Caddy ──> ml-api /predict ──> { is_anomaly, anomaly_score }
+Pi : mqtt-consumer ──HTTPS + jeton──> reverse proxy du serveur ──> ml-api (port 8010) /predict ──> { is_anomaly, anomaly_score }
 ```
 
 ## Le modèle
@@ -27,7 +27,7 @@ Colonnes utilisées (`app/features.py`) : `peltier_temp` (ventirad), `ambient_te
 | `app/security.py` | Vérifie le jeton `Authorization: Bearer ...` |
 | `train.py` | Entraîne le modèle à partir d'un export CSV |
 | `tests/test_predict.py` | Tests du serveur et du filtrage du CSV |
-| `Dockerfile`, `docker-compose.yaml`, `Caddyfile` | Déploiement : ml-api derrière Caddy (HTTPS) |
+| `Dockerfile`, `docker-compose.yaml` | Déploiement : ml-api sur un port local, derrière le reverse proxy du serveur |
 | `data/`, `models/` | CSV et modèle, **hors Git** et hors de l'image (volumes Docker) |
 
 ## Configuration (`.env`)
@@ -37,9 +37,9 @@ Copier `.env.example` en `.env` :
 | Variable | Valeur |
 |---|---|
 | `API_TOKEN` | Longue valeur aléatoire : `python -c "import secrets; print(secrets.token_urlsafe(32))"`. **La même** que `ML_API_TOKEN` dans le `.env` du Pi. |
-| `SITE_ADDRESS` | Nom de domaine du serveur (ex. `ml.example.org`), qui pointe vers son IP publique. |
+| `ML_PORT` | Port du serveur où le reverse proxy trouve l'API (défaut `8010`, doit être libre). |
 
-`.env` n'est jamais commité.
+`.env` n'est jamais commité (`.gitignore`).
 
 ## 1. Exporter les mesures (sur le Pi)
 
@@ -52,21 +52,28 @@ docker compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB
 ) TO STDOUT WITH CSV HEADER"' > peltier.csv
 ```
 
-Puis copier `peltier.csv` dans `ml_api/data/` sur le serveur (`scp`).
+Puis copier `peltier.csv` dans `data/` de ce dépôt, sur le serveur (`scp`).
 
 ## 2. Déployer et entraîner (sur le serveur)
 
-Prérequis : Docker, le nom de domaine pointé vers le serveur, ports **80** et **443** ouverts et libres (Caddy en a besoin pour obtenir le certificat HTTPS).
+Prérequis : Docker, et le reverse proxy déjà en place sur le serveur (celui qui associe tes autres domaines à leurs ports).
 
 ```bash
-cd ml_api
+cd ml-winery-api
 mkdir -p models data          # avant tout : sinon Docker les crée en root et train.py ne peut pas écrire
-cp .env.example .env          # remplir API_TOKEN et SITE_ADDRESS
+cp .env.example .env          # remplir API_TOKEN (et ML_PORT si 8010 est pris)
 # copier peltier.csv dans data/
 docker compose build
 docker compose run --rm ml-api python train.py data/peltier.csv "2026-11-03 17:39:14+00"
 docker compose up -d
 ```
+
+Ensuite, dans le reverse proxy : associer le domaine (ex. `ml.example.org`) à `http://127.0.0.1:8010`, **avec HTTPS activé** (certificat Let's Encrypt). Le Pi refuse une adresse en `http://` : le jeton voyage dans chaque requête.
+
+- Le port est publié sur `127.0.0.1` seulement : depuis Internet, on ne passe que par le proxy, en HTTPS.
+- **Si le proxy tourne lui-même dans Docker** (Nginx Proxy Manager, Traefik...), il ne voit pas le `127.0.0.1` du serveur. Deux solutions : viser l'IP locale du serveur ou `host.docker.internal` et publier `"${ML_PORT:-8010}:8000"` sans `127.0.0.1` (le pare-feu doit alors bloquer ce port depuis Internet) ; ou, mieux, mettre `ml-api` sur le réseau Docker du proxy et viser `http://ml-api:8000`.
+
+Vérifier sur le serveur : `curl -s -o /dev/null -w "%{http_code}\n" -X POST http://127.0.0.1:8010/predict` → `403` (pas de jeton : l'API répond).
 
 La date est **obligatoire** : les mesures plus anciennes sont ignorées. Mets le moment à partir duquel le matériel fonctionne correctement.
 
@@ -118,7 +125,7 @@ La documentation interactive (`/docs`) est désactivée : le serveur est public.
 ## Développement (sans Docker)
 
 ```bash
-cd ml_api
+cd ml-winery-api
 python -m venv .venv && .venv/Scripts/activate      # Linux : source .venv/bin/activate
 pip install -r requirements.txt httpx
 python train.py data/peltier.csv "2026-11-03 17:39:14+00"
@@ -128,4 +135,4 @@ python -m tests.test_predict                         # ou pytest
 
 ## État actuel
 
-Premier modèle entraîné le 2026-11-04 sur **235 lignes** seulement, avec le bruit des tachymètres : il juge 21 % de ses propres données anormales, et ne signale pas un ventilateur à 0 tr/min à température normale. À réentraîner dès qu'il y aura 1 à 2 semaines de mesures propres. Détails : `docs/ml-anomaly-detection.md`.
+Premier modèle entraîné le 2026-11-04 sur **235 lignes** seulement, avec le bruit des tachymètres : il juge 21 % de ses propres données anormales, et ne signale pas un ventilateur à 0 tr/min à température normale. À réentraîner dès qu'il y aura 1 à 2 semaines de mesures propres. Détails : `docs/ml-anomaly-detection.md` du dépôt principal (Winnery_Project_TFTIC).

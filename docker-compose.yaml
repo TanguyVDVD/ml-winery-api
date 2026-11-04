@@ -1,7 +1,9 @@
-# ML server: ml-api (the model) behind Caddy (HTTPS). Run from ml_api/ on the server.
+# ML server. Run from this folder on the server:
 #   docker compose build
 #   docker compose run --rm ml-api python train.py data/peltier.csv "2026-11-03 17:39:14+00"
 #   docker compose up -d
+# HTTPS is done by the reverse proxy already running on the server: point the
+# domain to the port below, with HTTPS enabled (the Pi refuses plain http).
 
 # At most 3 log files of 10 MB per container
 x-logging: &logging
@@ -19,35 +21,10 @@ services:
     environment:
       # Same value as ML_API_TOKEN in the .env of the Pi
       API_TOKEN: ${API_TOKEN:?API_TOKEN is missing in .env}
+    ports:
+      # 127.0.0.1: only programs of this server (the reverse proxy) can reach it,
+      # not the Internet in plain http. If the proxy runs in Docker, see README.
+      - "127.0.0.1:${ML_PORT:-8010}:8000"
     volumes:
       - ./models:/app/models   # written by train.py, read by the API
       - ./data:/app/data:ro    # CSV exports of the Pi
-    # No published port: only reachable through Caddy
-    networks:
-      - web
-
-  caddy:
-    logging: *logging
-    image: caddy:2
-    container_name: ml-caddy
-    restart: unless-stopped
-    environment:
-      SITE_ADDRESS: ${SITE_ADDRESS:?SITE_ADDRESS is missing in .env}
-    ports:
-      - "80:80"     # needed by Let's Encrypt to deliver the certificate
-      - "443:443"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data   # certificates: kept across restarts
-      - caddy_config:/config
-    depends_on:
-      - ml-api
-    networks:
-      - web
-
-networks:
-  web:
-
-volumes:
-  caddy_data:
-  caddy_config:
